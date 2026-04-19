@@ -1,0 +1,141 @@
+[
+  {
+    "id": "dalian_relaxed_parents_2d",
+    "user_input": "帮我安排一个大连2天轻松旅行计划，预算2000，和爸妈一起",
+    "expected_session_state": {
+      "city": "大连",
+      "days": 2,
+      "budget": 2000,
+      "companions": "老人同行",
+      "pace": "轻松",
+      "preference_tags": ["轻松"]
+    },
+    "expect_structured": true,
+    "expected_itinerary": {
+      "destination": "大连",
+      "days": 2,
+      "status": "ready"
+    }
+  },
+  {
+    "id": "hangzhou_food_relaxed_2d",
+    "user_input": "给我安排一个杭州2天轻松美食旅行，预算2500",
+    "expected_session_state": {
+      "city": "杭州",
+      "days": 2,
+      "budget": 2500,
+      "pace": "轻松",
+      "preference_tags": ["美食", "轻松"]
+    },
+    "expect_structured": true,
+    "expected_itinerary": {
+      "destination": "杭州",
+      "days": 2,
+      "status": "ready"
+    }
+  },
+  {
+    "id": "shanghai_photo_friends_3d",
+    "user_input": "帮我安排上海3天拍照旅行，预算3500，和朋友一起",
+    "expected_session_state": {
+      "city": "上海",
+      "days": 3,
+      "budget": 3500,
+      "companions": "朋友同行",
+      "preference_tags": ["拍照"]
+    },
+    "expect_structured": true,
+    "expected_itinerary": {
+      "destination": "上海",
+      "days": 3,
+      "status": "ready"
+    }
+  },
+  {
+    "id": "chongqing_food_night_2d",
+    "user_input": "重庆2天行程，预算1800，想看夜景和吃美食",
+    "expected_session_state": {
+      "city": "重庆",
+      "days": 2,
+      "budget": 1800,
+      "preference_tags": ["美食", "夜景"]
+    },
+    "expect_structured": true,
+    "expected_itinerary": {
+      "destination": "重庆",
+      "days": 2,
+      "status": "ready"
+    }
+  },
+  {
+    "id": "dalian_missing_days",
+    "user_input": "我想去大连旅行，预算2000，和爸妈一起，轻松一点",
+    "expected_session_state": {
+      "city": "大连",
+      "budget": 2000,
+      "companions": "老人同行",
+      "pace": "轻松",
+      "preference_tags": ["轻松"]
+    },
+    "expect_structured": true,
+    "expected_itinerary": {
+      "destination": "大连",
+      "status": "needs_clarification"
+    }
+  },
+  {
+    "id": "date_resolution_mmdd",
+    "user_input": "帮我安排一个大连2天旅行，4月14日出发，预算2200",
+    "expected_session_state": {
+      "city": "大连",
+      "days": 2,
+      "date": "__NEXT_MM_DD__:04-14",
+      "budget": 2200
+    },
+    "expect_structured": true,
+    "expected_itinerary": {
+      "destination": "大连",
+      "days": 2,
+      "status": "ready"
+    }
+  },
+  {
+    "id": "date_resolution_mmdd_hao",
+    "user_input": "玩三天，5月20号去，情侣游，预算3000",
+    "expected_session_state": {
+      "days": 3,
+      "date": "__NEXT_MM_DD__:05-20",
+      "budget": 3000,
+      "companions": "情侣"
+    },
+    "expect_structured": true,
+    "expected_itinerary": {
+      "days": 3,
+      "status": "needs_clarification"
+    }
+  },
+  {
+    "id": "missing_city_planning_request",
+    "user_input": "帮我安排一个2天轻松旅行计划，预算1500",
+    "expected_session_state": {
+      "days": 2,
+      "budget": 1500,
+      "pace": "轻松",
+      "preference_tags": ["轻松"]
+    },
+    "expect_structured": true,
+    "expected_itinerary": {
+      "days": 2,
+      "status": "needs_clarification"
+    }
+  },
+  {
+    "id": "long_term_preference_only",
+    "user_input": "我以后都喜欢轻松一点",
+    "expected_session_state": {
+      "pace": "轻松",
+      "preference_tags": ["轻松"]
+    },
+    "expect_structured": false
+  }
+]
