@@ -1,14 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   AlertTriangle,
-  ArrowRight,
   Calendar,
   Cloud,
   Hotel,
   Lightbulb,
-  Loader2,
   MapPin,
-  Navigation,
   Sparkles,
   Sunrise,
   Sun,
@@ -20,15 +17,10 @@ import {
   Activity,
   BudgetAdvice,
   DailyPlan,
-  DayRouteMapResponse,
   HotelSuggestion,
-  RouteLeg,
-  RoutePoint,
   StructuredItinerary,
 } from './types';
-import { fetchDayRouteMap } from './apiRuntime';
-import { DayRouteMap } from './DayRouteMap';
-import { getAmapConfigError } from './amapLoader';
+import { ItineraryRouteMap } from './ItineraryRouteMap';
 
 function ActivityList({
   items,
@@ -50,259 +42,6 @@ function ActivityList({
           {item.reason && <div>{item.reason}</div>}
         </div>
       ))}
-    </div>
-  );
-}
-
-function normalizeRouteLabel(value?: string) {
-  return value?.trim() ?? '';
-}
-
-function getRoutePointLabel(point: RoutePoint) {
-  return point.label || point.location || point.title || `第 ${point.order} 站`;
-}
-
-function getDisplayRoutePoints(plan: DailyPlan): RoutePoint[] {
-  if (plan.route_points && plan.route_points.length > 0) {
-    return plan.route_points.filter((point) => normalizeRouteLabel(getRoutePointLabel(point)));
-  }
-
-  const routePoints: RoutePoint[] = [];
-  const timeSlots: Array<['morning' | 'afternoon' | 'evening', string]> = [
-    ['morning', '上午'],
-    ['afternoon', '下午'],
-    ['evening', '晚上'],
-  ];
-
-  for (const [slotKey, slotLabel] of timeSlots) {
-    const items = plan[slotKey] ?? [];
-    for (const item of items) {
-      const label = normalizeRouteLabel(item.location || item.title);
-      if (!label || label === '待补充安排') {
-        continue;
-      }
-
-      if (routePoints.length > 0) {
-        const previous = routePoints[routePoints.length - 1];
-        if (normalizeRouteLabel(getRoutePointLabel(previous)) === label) {
-          continue;
-        }
-      }
-
-      routePoints.push({
-        order: routePoints.length + 1,
-        label,
-        title: item.title,
-        location: item.location,
-        time_slot: slotLabel,
-      });
-    }
-  }
-
-  return routePoints;
-}
-
-function getRouteModeLabel(mode?: string) {
-  switch (mode) {
-    case 'driving':
-      return '驾车';
-    case 'transit':
-      return '公交/地铁';
-    default:
-      return '步行';
-  }
-}
-
-function DailyRoutePreview({ plan, city }: { plan: DailyPlan; city?: string }) {
-  const routePoints = getDisplayRoutePoints(plan);
-  const routeLegs = plan.route_legs ?? [];
-  const [isMapOpen, setIsMapOpen] = useState(false);
-  const [isMapLoading, setIsMapLoading] = useState(false);
-  const [mapError, setMapError] = useState('');
-  const [mapData, setMapData] = useState<DayRouteMapResponse | null>(null);
-  const mapRequestRef = useRef<AbortController | null>(null);
-  const routeSignature = [
-    city || '',
-    ...routePoints.map((point) =>
-      [point.order, getRoutePointLabel(point), point.lng ?? '', point.lat ?? ''].join(':'),
-    ),
-    ...routeLegs.map((leg) =>
-      [
-        leg.from_order,
-        leg.to_order,
-        leg.mode ?? '',
-        leg.duration_text ?? '',
-        leg.distance_text ?? '',
-      ].join(':'),
-    ),
-  ].join('|');
-
-  useEffect(() => {
-    mapRequestRef.current?.abort();
-    mapRequestRef.current = null;
-    setIsMapOpen(false);
-    setIsMapLoading(false);
-    setMapError('');
-    setMapData(null);
-  }, [routeSignature]);
-
-  useEffect(() => {
-    return () => {
-      mapRequestRef.current?.abort();
-    };
-  }, []);
-
-  if (routePoints.length < 2 && routeLegs.length === 0) {
-    return null;
-  }
-
-  const handleToggleMap = async () => {
-    if (isMapOpen) {
-      mapRequestRef.current?.abort();
-      mapRequestRef.current = null;
-      setIsMapLoading(false);
-      setIsMapOpen(false);
-      return;
-    }
-
-    setIsMapOpen(true);
-
-    if (mapData || isMapLoading) {
-      return;
-    }
-
-    if (routePoints.length < 2) {
-      setMapError('当前这一天的地点不足，暂时无法生成地图路线。');
-      return;
-    }
-
-    const configError = getAmapConfigError();
-    if (configError) {
-      setMapError(configError);
-      return;
-    }
-
-    setMapError('');
-    const controller = new AbortController();
-    mapRequestRef.current?.abort();
-    mapRequestRef.current = controller;
-    setIsMapLoading(true);
-
-    try {
-      const response = await fetchDayRouteMap(
-        {
-          city,
-          route_points: routePoints,
-          route_legs: routeLegs,
-        },
-        {
-          signal: controller.signal,
-          timeoutMs: 45000,
-        },
-      );
-
-      if (controller.signal.aborted) {
-        return;
-      }
-
-      setMapData(response);
-
-      if (response.route_points.length < 2) {
-        setMapError('暂时无法生成可展示的地图路线，请稍后重试。');
-      }
-    } catch (error) {
-      if (controller.signal.aborted) {
-        return;
-      }
-
-      setMapError(error instanceof Error ? error.message : '地图路线加载失败，请稍后重试。');
-    } finally {
-      if (mapRequestRef.current === controller) {
-        mapRequestRef.current = null;
-      }
-      setIsMapLoading(false);
-    }
-  };
-
-  return (
-    <div className="daily-route-preview">
-      <div className="daily-route-title">
-        <Navigation size={16} />
-        <span>路线速览</span>
-      </div>
-
-      {routePoints.length > 1 && (
-        <div className="daily-route-path">
-          {routePoints.map((point, idx) => {
-            const label = getRoutePointLabel(point);
-            return (
-              <div key={`${label}-${idx}`} className="daily-route-node">
-                <span className="daily-route-stop">{label}</span>
-                {idx < routePoints.length - 1 && <ArrowRight size={14} className="daily-route-arrow" />}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="daily-route-actions">
-        <button type="button" className="route-map-toggle-btn" onClick={() => void handleToggleMap()}>
-          {isMapLoading ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />}
-          <span>{isMapOpen ? '收起地图' : '查看地图'}</span>
-        </button>
-      </div>
-
-      {routeLegs.length > 0 && (
-        <div className="route-leg-list">
-          {routeLegs.map((leg: RouteLeg, idx) => (
-            <div key={`${leg.from_order}-${leg.to_order}-${idx}`} className="route-leg-item">
-              <div className="route-leg-topline">
-                <span className={`route-mode-badge ${leg.mode || 'walking'}`}>
-                  {getRouteModeLabel(leg.mode)}
-                </span>
-                <span className="route-leg-link">
-                  {(leg.from_label || `第 ${leg.from_order} 站`) +
-                    ' -> ' +
-                    (leg.to_label || `第 ${leg.to_order} 站`)}
-                </span>
-              </div>
-
-              {(leg.duration_text || leg.distance_text) && (
-                <div className="route-leg-meta">
-                  {leg.duration_text && <span>{leg.duration_text}</span>}
-                  {leg.distance_text && <span>{leg.distance_text}</span>}
-                </div>
-              )}
-
-              {leg.summary && <div className="route-leg-summary">{leg.summary}</div>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {isMapOpen && (
-        <div className="route-map-shell">
-          {isMapLoading && <div className="route-map-state">正在加载这一天的地图路线...</div>}
-
-          {!isMapLoading && mapError && <div className="route-map-state error">{mapError}</div>}
-
-          {!isMapLoading && !mapError && mapData && (
-            <>
-              {mapData.warnings && mapData.warnings.length > 0 && (
-                <div className="route-map-warnings">
-                  {mapData.warnings.map((warning, idx) => (
-                    <div key={`${warning}-${idx}`} className="route-map-warning">
-                      {warning}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <DayRouteMap data={mapData} />
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -403,7 +142,7 @@ function ItineraryOverview({ itinerary }: { itinerary: StructuredItinerary }) {
   );
 }
 
-function DailyPlans({ plans, destination }: { plans: DailyPlan[]; destination?: string }) {
+function DailyPlans({ plans }: { plans: DailyPlan[] }) {
   return (
     <div className="itinerary-section">
       <h3 className="section-title">每日安排</h3>
@@ -443,8 +182,6 @@ function DailyPlans({ plans, destination }: { plans: DailyPlan[]; destination?: 
                 <ActivityList items={plan.evening ?? []} emptyText="晚上安排待补充" />
               </div>
             </div>
-
-            <DailyRoutePreview plan={plan} city={destination} />
 
             {plan.highlights && plan.highlights.length > 0 && (
               <div className="daily-highlights">
@@ -550,7 +287,6 @@ function BudgetSection({ advice }: { advice: BudgetAdvice }) {
       </h3>
 
       {advice.level && <div className={`budget-level ${getBudgetLevelColor(advice.level)}`}>{advice.level}</div>}
-
       {advice.summary && <p className="budget-summary">{advice.summary}</p>}
     </div>
   );
@@ -636,7 +372,7 @@ export function ItineraryPanel({ itinerary, shouldScroll }: ItineraryPanelProps)
         <div className="clarification-card">
           <div className="clarification-icon">⏳</div>
           <h3>正在整理你的行程</h3>
-          <p>先在左侧查看自然语言回复，结构化结果生成后会显示在这里。</p>
+          <p>请稍候，结构化结果生成后会显示在这里。</p>
         </div>
       </div>
     );
@@ -671,9 +407,10 @@ export function ItineraryPanel({ itinerary, shouldScroll }: ItineraryPanelProps)
 
       <div className="itinerary-content">
         <ItineraryOverview itinerary={itinerary} />
+        <ItineraryRouteMap itinerary={itinerary} />
 
         {itinerary.daily_plans && itinerary.daily_plans.length > 0 && (
-          <DailyPlans plans={itinerary.daily_plans} destination={itinerary.destination} />
+          <DailyPlans plans={itinerary.daily_plans} />
         )}
 
         {itinerary.hotel_suggestion && <HotelSection suggestion={itinerary.hotel_suggestion} />}

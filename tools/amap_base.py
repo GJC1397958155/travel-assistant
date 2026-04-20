@@ -2,7 +2,7 @@ import httpx
 
 from config import AMAP_WEB_API_HOST, AMAP_WEB_API_KEY
 
-# 统一处理高德请求
+
 def amap_base_url() -> str:
     host = AMAP_WEB_API_HOST.strip()
     if not host:
@@ -12,7 +12,7 @@ def amap_base_url() -> str:
     return f"https://{host.rstrip('/')}"
 
 
-def amap_request(path: str, params: dict, *, timeout_seconds: float = 20.0) -> dict:
+def amap_request(path: str, params: dict) -> dict:
     base_url = amap_base_url()
     if not base_url:
         raise RuntimeError("未配置 AMAP_WEB_API_HOST。")
@@ -25,7 +25,7 @@ def amap_request(path: str, params: dict, *, timeout_seconds: float = 20.0) -> d
         **params,
     }
 
-    with httpx.Client(timeout=timeout_seconds, trust_env=False) as client:
+    with httpx.Client(timeout=20.0, trust_env=False) as client:
         response = client.get(
             f"{base_url}{path}",
             params=request_params,

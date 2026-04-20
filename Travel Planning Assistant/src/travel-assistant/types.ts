@@ -4,52 +4,25 @@ export interface ChatRequest {
   user_id: string;
 }
 
-export interface DailyPlan {
-  day: number;
-  date: string;
-  title?: string;
-  weather?: string;
-  morning: Activity[];
-  afternoon: Activity[];
-  evening: Activity[];
-  route_points?: RoutePoint[];
-  route_legs?: RouteLeg[];
-  transport_tip?: string;
-  dining_tip?: string;
-  notes?: string[];
-  alternatives?: string[];
-  highlights?: string[];
-}
-
 export interface Activity {
   title: string;
   location?: string;
   reason?: string;
 }
 
-export interface RoutePoint {
-  order: number;
-  label?: string;
+export interface DailyPlan {
+  day: number;
+  date?: string;
   title?: string;
-  location?: string;
-  time_slot?: string;
-  lng?: number | null;
-  lat?: number | null;
-}
-
-export interface RouteLeg {
-  from_order: number;
-  to_order: number;
-  from_label?: string;
-  to_label?: string;
-  mode?: 'walking' | 'driving' | 'transit' | string;
-  mode_label?: string;
-  distance_text?: string;
-  duration_text?: string;
-  summary?: string;
-  polyline?: string;
-  path?: number[][];
-  error?: string;
+  weather?: string;
+  morning: Activity[];
+  afternoon: Activity[];
+  evening: Activity[];
+  transport_tip?: string;
+  dining_tip?: string;
+  notes?: string[];
+  alternatives?: string[];
+  highlights?: string[];
 }
 
 export interface HotelSuggestion {
@@ -104,25 +77,6 @@ export interface ChatResponse {
   session_state?: SessionState | null;
   memory_backend?: string;
   memory_persistent?: boolean;
-}
-
-export interface DayRouteMapRequest {
-  city?: string;
-  route_points: RoutePoint[];
-  route_legs?: RouteLeg[];
-}
-
-export interface DayRouteMapResponse {
-  city?: string;
-  route_points: RoutePoint[];
-  route_legs: RouteLeg[];
-  warnings?: string[];
-}
-
-export interface StructuredItineraryRequest {
-  user_input: string;
-  answer: string;
-  session_state?: SessionState | null;
 }
 
 export interface Message {

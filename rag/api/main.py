@@ -1,5 +1,5 @@
-import os
 import json
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,9 +10,7 @@ from app import (
     DEFAULT_SESSION_ID,
     DEFAULT_USER_ID,
     ask_agent_with_metadata,
-    build_day_route_map,
     build_agent,
-    build_structured_itinerary_with_model,
     stream_agent_with_metadata,
 )
 
@@ -42,40 +40,6 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = DEFAULT_SESSION_ID
     user_id: str = DEFAULT_USER_ID
-
-
-class RoutePointPayload(BaseModel):
-    order: int
-    label: str = ""
-    title: str = ""
-    location: str = ""
-    time_slot: str = ""
-    lng: float | None = None
-    lat: float | None = None
-
-
-class RouteLegPayload(BaseModel):
-    from_order: int
-    to_order: int
-    from_label: str = ""
-    to_label: str = ""
-    mode: str = "walking"
-    distance_text: str = ""
-    duration_text: str = ""
-    summary: str = ""
-    polyline: str = ""
-
-
-class DayRouteMapRequest(BaseModel):
-    city: str = ""
-    route_points: list[RoutePointPayload]
-    route_legs: list[RouteLegPayload] = []
-
-
-class StructuredItineraryRequest(BaseModel):
-    user_input: str
-    answer: str
-    session_state: dict = {}
 
 
 def _format_sse(event: str, payload: dict) -> str:
@@ -115,30 +79,6 @@ def chat_stream(req: ChatRequest):
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
-    )
-
-
-@app.post("/map/day-route")
-def map_day_route(req: DayRouteMapRequest):
-    return build_day_route_map(
-        city=req.city,
-        route_points=[
-            point.model_dump() if hasattr(point, "model_dump") else point.dict()
-            for point in req.route_points
-        ],
-        route_legs=[
-            leg.model_dump() if hasattr(leg, "model_dump") else leg.dict()
-            for leg in req.route_legs
-        ],
-    )
-
-
-@app.post("/itinerary/structure")
-def structure_itinerary(req: StructuredItineraryRequest):
-    return build_structured_itinerary_with_model(
-        req.user_input,
-        req.session_state or {},
-        req.answer,
     )
 
 

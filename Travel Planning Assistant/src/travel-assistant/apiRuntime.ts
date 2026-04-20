@@ -1,11 +1,4 @@
-import {
-  ChatRequest,
-  ChatResponse,
-  DayRouteMapRequest,
-  DayRouteMapResponse,
-  StructuredItinerary,
-  StructuredItineraryRequest,
-} from './types';
+import { ChatRequest, ChatResponse } from './types';
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
@@ -14,11 +7,6 @@ interface SendChatMessageOptions {
   timeoutMs?: number;
   onToken?: (delta: string) => void;
   onStatus?: (stage: string) => void;
-}
-
-interface JsonRequestOptions {
-  signal?: AbortSignal;
-  timeoutMs?: number;
 }
 
 interface SseFrame {
@@ -32,6 +20,13 @@ export class ChatApiError extends Error {
   constructor(message: string, public statusCode?: number) {
     super(message);
     this.name = 'ChatApiError';
+  }
+}
+
+export class ChatRequestCancelledError extends Error {
+  constructor(message = '已停止本次生成。') {
+    super(message);
+    this.name = 'ChatRequestCancelledError';
   }
 }
 
@@ -104,111 +99,7 @@ function parseStreamPayload(frame: SseFrame): StreamPayload {
   try {
     return JSON.parse(frame.data) as StreamPayload;
   } catch {
-    throw new ChatApiError('Received an invalid streaming payload from the server.');
-  }
-}
-
-export class ChatRequestCancelledError extends Error {
-  constructor(message = '已停止本次生成。') {
-    super(message);
-    this.name = 'ChatRequestCancelledError';
-  }
-}
-
-async function postJson<TResponse>(
-  path: string,
-  payload: unknown,
-  options: JsonRequestOptions = {},
-): Promise<TResponse> {
-  const requestController = new AbortController();
-  const timeoutMs = options.timeoutMs ?? 60000;
-
-  const abortWithReason = (reason: string) => {
-    if (!requestController.signal.aborted) {
-      requestController.abort(reason);
-    }
-  };
-
-  const handleExternalAbort = () => {
-    abortWithReason(
-      typeof options.signal?.reason === 'string' ? options.signal.reason : 'cancelled',
-    );
-  };
-
-  if (options.signal) {
-    if (options.signal.aborted) {
-      handleExternalAbort();
-    } else {
-      options.signal.addEventListener('abort', handleExternalAbort, { once: true });
-    }
-  }
-
-  const timeoutId = window.setTimeout(() => abortWithReason('timeout'), timeoutMs);
-
-  try {
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      signal: requestController.signal,
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      let errorMessage = `请求失败: ${response.status} ${response.statusText}`;
-      const contentType = response.headers.get('content-type') || '';
-
-      if (contentType.includes('application/json')) {
-        const errorData = await response.json().catch(() => null);
-        const detail =
-          typeof errorData?.detail === 'string'
-            ? errorData.detail
-            : typeof errorData?.message === 'string'
-              ? errorData.message
-              : '';
-        if (detail) {
-          errorMessage = detail;
-        }
-      } else {
-        const errorText = await response.text().catch(() => '');
-        if (errorText) {
-          errorMessage = errorText;
-        }
-      }
-
-      throw new ChatApiError(errorMessage, response.status);
-    }
-
-    return (await response.json()) as TResponse;
-  } catch (error) {
-    if (error instanceof ChatApiError) {
-      throw error;
-    }
-
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      const abortReason =
-        typeof requestController.signal.reason === 'string'
-          ? requestController.signal.reason
-          : 'cancelled';
-
-      if (abortReason === 'timeout') {
-        throw new ChatApiError('地图加载超时，请稍后重试。');
-      }
-
-      throw new ChatRequestCancelledError('已取消地图加载。');
-    }
-
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      throw new ChatApiError('无法连接到后端服务，请确认 `http://localhost:8000` 已启动。');
-    }
-
-    throw new ChatApiError('地图加载失败，请稍后重试。');
-  } finally {
-    window.clearTimeout(timeoutId);
-    if (options.signal) {
-      options.signal.removeEventListener('abort', handleExternalAbort);
-    }
+    throw new ChatApiError('后端返回了无法解析的流式数据。');
   }
 }
 
@@ -277,7 +168,7 @@ export async function sendChatMessage(
     }
 
     if (!response.body) {
-      throw new ChatApiError('Streaming response body is unavailable.');
+      throw new ChatApiError('无法读取后端流式响应。');
     }
 
     const reader = response.body.getReader();
@@ -311,7 +202,7 @@ export async function sendChatMessage(
 
       if (frame.event === 'error') {
         const message =
-          typeof payload.message === 'string' ? payload.message : 'Server stream failed.';
+          typeof payload.message === 'string' ? payload.message : '后端流式处理失败。';
         throw new ChatApiError(message);
       }
     };
@@ -339,7 +230,7 @@ export async function sendChatMessage(
     }
 
     if (!finalResponse) {
-      throw new ChatApiError('Server closed the stream before returning a final response.');
+      throw new ChatApiError('流式响应提前结束，未返回最终结果。');
     }
 
     return finalResponse;
@@ -372,24 +263,4 @@ export async function sendChatMessage(
       options.signal.removeEventListener('abort', handleExternalAbort);
     }
   }
-}
-
-export async function fetchDayRouteMap(
-  request: DayRouteMapRequest,
-  options: JsonRequestOptions = {},
-): Promise<DayRouteMapResponse> {
-  return postJson<DayRouteMapResponse>('/map/day-route', request, {
-    timeoutMs: options.timeoutMs ?? 90000,
-    signal: options.signal,
-  });
-}
-
-export async function fetchStructuredItinerary(
-  request: StructuredItineraryRequest,
-  options: JsonRequestOptions = {},
-): Promise<StructuredItinerary> {
-  return postJson<StructuredItinerary>('/itinerary/structure', request, {
-    timeoutMs: options.timeoutMs ?? 90000,
-    signal: options.signal,
-  });
 }
