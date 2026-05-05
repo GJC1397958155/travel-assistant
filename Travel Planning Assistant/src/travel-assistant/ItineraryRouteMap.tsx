@@ -533,8 +533,8 @@ function estimateFallbackDistanceMeters(from: any, to: any): number | undefined 
   return earthRadiusMeters * c;
 }
 
-function buildRouteCacheEntryKey(dayKey: string, mode: RouteMode): string {
-  return `${dayKey}::${mode}`;
+function buildRouteCacheEntryKey(dayKey: string): string {
+  return dayKey;
 }
 
 async function fetchRouteSegmentData(
@@ -930,9 +930,23 @@ function buildMarkerToneClass(label: string): string {
   return markerTones[(code - 65) % markerTones.length];
 }
 
-function buildMarkerHtml(label: string): string {
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildMarkerHtml(label: string, title: string): string {
   const toneClass = buildMarkerToneClass(label);
-  return `<div class="route-marker-pin route-marker-pin-${toneClass}">${label}</div>`;
+  return `
+    <div class="route-marker">
+      <div class="route-marker-pin route-marker-pin-${toneClass}">${escapeHtml(label)}</div>
+      <div class="route-marker-label">${escapeHtml(title)}</div>
+    </div>
+  `;
 }
 
 function extractPositionCoords(position: any): { lng: number; lat: number } | null {
@@ -1224,13 +1238,11 @@ function planWalkingSegment(
 }
 
 async function buildRoutePath(
-  _AMap: AMapApi,
+  AMap: AMapApi,
   resolved: ResolvedStop[],
-  options: {
-    mode: RouteMode;
-    city: string;
-  },
 ): Promise<RoutePathResult> {
+  await ensureAmapPlugins(AMap, ['AMap.Walking']);
+
   if (resolved.length < 2) {
     return {
       path: [],
@@ -1250,10 +1262,7 @@ async function buildRoutePath(
     const to = resolved[index + 1];
 
     try {
-      const routeData = await fetchRouteSegmentData(from, to, {
-        city: options.city,
-        mode: options.mode,
-      });
+      const routeData = await planWalkingSegment(AMap, from, to);
       appendUniquePathPoints(path, routeData.path);
       segments.push({
         key: `${from.key}->${to.key}`,
@@ -1261,15 +1270,11 @@ async function buildRoutePath(
         toLabel: to.label,
         fromTitle: from.title,
         toTitle: to.title,
-        distanceText: formatDistanceText(routeData.distanceMeters),
-        durationText: formatDurationText(routeData.durationSeconds),
-        fallback: routeData.fallback,
+        distanceText: routeData.segment.distanceText,
+        durationText: routeData.segment.durationText,
+        fallback: false,
       });
-      if (routeData.fallback) {
-        fallbackSegments += 1;
-      } else {
-        routedSegments += 1;
-      }
+      routedSegments += 1;
     } catch {
       const estimatedDistance = estimateFallbackDistanceMeters(from.position, to.position);
       appendUniquePathPoints(path, [from.position, to.position]);
@@ -1300,8 +1305,6 @@ async function buildCachedRouteDay(
   routeDay: RouteDay,
   resolved: ResolvedStop[],
   failed: FailedStop[],
-  routeMode: RouteMode,
-  destination: string,
 ): Promise<CachedRouteDay> {
   const orderedResolved = orderResolvedStops(routeDay, resolved);
   const orderedFailed = orderFailedStops(routeDay, failed);
@@ -1314,10 +1317,7 @@ async function buildCachedRouteDay(
     };
   }
 
-  const routePathResult = await buildRoutePath(AMap, orderedResolved, {
-    mode: routeMode,
-    city: destination,
-  });
+  const routePathResult = await buildRoutePath(AMap, orderedResolved);
 
   return {
     status: 'ready',
@@ -1339,13 +1339,7 @@ function buildRouteOverlays(AMap: AMapApi, cached: CachedRouteDay): any[] {
       position: markerPosition,
       anchor: 'bottom-center',
       title: stop.formattedAddress,
-      content: buildMarkerHtml(stop.label),
-    });
-
-    marker.setLabel?.({
-      direction: 'right',
-      offset: new AMap.Pixel(12, -4),
-      content: `<div class="route-marker-label">${stop.title}</div>`,
+      content: buildMarkerHtml(stop.label, stop.title),
     });
 
     return marker;
@@ -1371,7 +1365,7 @@ function buildRouteOverlays(AMap: AMapApi, cached: CachedRouteDay): any[] {
   return overlays;
 }
 
-function buildRouteReadyMessage(routeDay: RouteDay, cached: CachedRouteDay, routeMode: RouteMode): string {
+function buildRouteReadyMessage(routeDay: RouteDay, cached: CachedRouteDay): string {
   const locationSummary =
     cached.failed.length > 0
       ? `已定位 ${cached.resolved.length}/${routeDay.stops.length} 个地点`
@@ -1382,19 +1376,18 @@ function buildRouteReadyMessage(routeDay: RouteDay, cached: CachedRouteDay, rout
   }
 
   if (cached.fallbackSegments > 0) {
-    return `${locationSummary}，已生成${ROUTE_MODE_LABELS[routeMode]}路线，${cached.fallbackSegments} 段暂用直线补位。`;
+    return `${locationSummary}，部分路段暂用直线补位。`;
   }
 
-  return `${locationSummary}，已按${ROUTE_MODE_LABELS[routeMode]}路线生成 ${cached.routedSegments} 段导航预览。`;
+  return `${locationSummary}，已按活动顺序生成 ${cached.routedSegments} 段路线预览。`;
 }
 
 function buildPrefetchLoadingMessage(
   routeDays: RouteDay[],
   routeCache: Record<string, CachedRouteDay>,
-  routeMode: RouteMode,
 ): string {
   const finishedCount = routeDays.filter((day) => {
-    const status = routeCache[buildRouteCacheEntryKey(day.key, routeMode)]?.status;
+    const status = routeCache[buildRouteCacheEntryKey(day.key)]?.status;
     return status === 'ready' || status === 'error';
   }).length;
 
@@ -1403,12 +1396,8 @@ function buildPrefetchLoadingMessage(
 
 export function ItineraryRouteMap({
   itinerary,
-  onItineraryChange,
-  onClientContextChange,
 }: {
   itinerary: StructuredItinerary;
-  onItineraryChange?: (next: StructuredItinerary) => void;
-  onClientContextChange?: (context: string) => void;
 }) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -1438,7 +1427,6 @@ export function ItineraryRouteMap({
 
   const [activeDayIndex, setActiveDayIndex] = useState(0);
   const [isMapExpanded, setIsMapExpanded] = useState(false);
-  const [routeMode, setRouteMode] = useState<RouteMode>('walking');
   const [routeCache, setRouteCache] = useState<Record<string, CachedRouteDay>>({});
   const [manualQueries, setManualQueries] = useState<Record<string, string>>({});
   const [retryingStops, setRetryingStops] = useState<Record<string, boolean>>({});
@@ -1453,9 +1441,7 @@ export function ItineraryRouteMap({
   );
 
   const activeDay = routeDays[activeDayIndex];
-  const activeDayCache = activeDay
-    ? routeCache[buildRouteCacheEntryKey(activeDay.key, routeMode)]
-    : undefined;
+  const activeDayCache = activeDay ? routeCache[buildRouteCacheEntryKey(activeDay.key)] : undefined;
 
   useEffect(() => {
     routeCacheRef.current = routeCache;
@@ -1586,7 +1572,7 @@ export function ItineraryRouteMap({
         setRouteCache((prev) => {
           const next = { ...prev };
           routeDays.forEach((day) => {
-            const cacheKey = buildRouteCacheEntryKey(day.key, routeMode);
+            const cacheKey = buildRouteCacheEntryKey(day.key);
             if (!next[cacheKey] || next[cacheKey].status === 'idle') {
               next[cacheKey] = createEmptyRouteDay('loading');
             }
@@ -1596,7 +1582,7 @@ export function ItineraryRouteMap({
 
         await Promise.all(
           routeDays.map(async (day) => {
-            const cacheKey = buildRouteCacheEntryKey(day.key, routeMode);
+            const cacheKey = buildRouteCacheEntryKey(day.key);
             if (routeCacheRef.current[cacheKey]?.status === 'ready') {
               return;
             }
@@ -1612,8 +1598,6 @@ export function ItineraryRouteMap({
                 day,
                 resolved,
                 failed,
-                routeMode,
-                normalizeText(itinerary.destination),
               );
               if (cancelled) {
                 return;
@@ -1657,7 +1641,7 @@ export function ItineraryRouteMap({
     return () => {
       cancelled = true;
     };
-  }, [itinerary.destination, mapStatus, routeCacheKey, routeDays, routeMode]);
+  }, [itinerary.destination, mapStatus, routeCacheKey, routeDays]);
 
   useEffect(() => {
     if (mapStatus !== 'ready' || !mapRef.current) {
@@ -1677,7 +1661,7 @@ export function ItineraryRouteMap({
 
     if (!activeDayCache || activeDayCache.status === 'idle' || activeDayCache.status === 'loading') {
       setRouteStatus('loading');
-      setStatusMessage(buildPrefetchLoadingMessage(routeDays, routeCache, routeMode));
+      setStatusMessage(buildPrefetchLoadingMessage(routeDays, routeCache));
       return;
     }
 
@@ -1701,7 +1685,7 @@ export function ItineraryRouteMap({
         map.setFitView(overlays, false, [56, 56, 56, 56]);
 
         setRouteStatus('ready');
-        setStatusMessage(buildRouteReadyMessage(activeDay, activeDayCache, routeMode));
+        setStatusMessage(buildRouteReadyMessage(activeDay, activeDayCache));
       })
       .catch((error) => {
         if (cancelled) {
@@ -1716,7 +1700,7 @@ export function ItineraryRouteMap({
       cancelled = true;
       clearMapOverlays(map, overlayRef.current);
     };
-  }, [activeDay, activeDayCache, mapStatus, routeCache, routeDays, routeMode]);
+  }, [activeDay, activeDayCache, mapStatus, routeCache, routeDays]);
 
   const activeResolvedByKey = useMemo(
     () => new Map((activeDayCache?.resolved ?? []).map((stop) => [stop.key, stop])),
@@ -1727,21 +1711,13 @@ export function ItineraryRouteMap({
     [activeDayCache?.failed],
   );
   const activeRouteSegments = activeDayCache?.routeSegments ?? [];
-  const feasibilityChecks = useMemo(
-    () => buildFeasibilityChecks(activeDay, activeDayCache, routeMode),
-    [activeDay, activeDayCache, routeMode],
-  );
-
-  useEffect(() => {
-    onClientContextChange?.(buildRouteClientContext(itinerary, routeMode, feasibilityChecks));
-  }, [feasibilityChecks, itinerary, onClientContextChange, routeMode]);
 
   async function handleUseCandidate(stop: RouteStop, candidate: RouteCandidate) {
     if (!activeDay) {
       return;
     }
 
-    const activeCacheKey = buildRouteCacheEntryKey(activeDay.key, routeMode);
+    const activeCacheKey = buildRouteCacheEntryKey(activeDay.key);
 
     setRetryingStops((prev) => ({
       ...prev,
@@ -1765,8 +1741,6 @@ export function ItineraryRouteMap({
         activeDay,
         nextResolved,
         nextFailed,
-        routeMode,
-        normalizeText(itinerary.destination),
       );
 
       setRouteCache((prev) => ({
@@ -1778,7 +1752,6 @@ export function ItineraryRouteMap({
         delete next[stop.key];
         return next;
       });
-      onItineraryChange?.(applyResolvedStopToItinerary(itinerary, stop, resolvedStop));
     } finally {
       setRetryingStops((prev) => {
         const next = { ...prev };
@@ -1793,7 +1766,7 @@ export function ItineraryRouteMap({
       return;
     }
 
-    const activeCacheKey = buildRouteCacheEntryKey(activeDay.key, routeMode);
+    const activeCacheKey = buildRouteCacheEntryKey(activeDay.key);
     const retryQuery = normalizeText(manualQueries[stop.key]) || stop.query;
     const retryStop = buildRetryStop(stop, retryQuery);
 
@@ -1826,8 +1799,6 @@ export function ItineraryRouteMap({
         activeDay,
         nextResolved,
         nextFailed,
-        routeMode,
-        normalizeText(itinerary.destination),
       );
 
       setRouteCache((prev) => ({
@@ -1839,7 +1810,6 @@ export function ItineraryRouteMap({
         delete next[stop.key];
         return next;
       });
-      onItineraryChange?.(applyResolvedStopToItinerary(itinerary, stop, resolvedStop));
     } catch (error) {
       const currentCache = routeCacheRef.current[activeCacheKey] ?? createEmptyRouteDay('idle');
       const failedStop: FailedStop = {
@@ -1897,7 +1867,7 @@ export function ItineraryRouteMap({
         : mapStatus === 'missing-key'
           ? '未检测到高德地图 JS Key，请先在 .env 中配置。'
           : routeStatus === 'loading'
-            ? `正在预生成${ROUTE_MODE_LABELS[routeMode]}路线…`
+            ? '正在预生成地图路线…'
             : routeStatus === 'error'
               ? statusMessage
               : null;
@@ -1909,7 +1879,7 @@ export function ItineraryRouteMap({
           <MapPinned size={18} />
           地图路线
         </h3>
-        <p className="route-section-note">按每天活动顺序生成路线预览，可切换步行、打车或公交。</p>
+        <p className="route-section-note">按每天活动顺序生成 A-B-C 路线预览。</p>
       </div>
 
       <div className="route-day-tabs">
@@ -1941,19 +1911,6 @@ export function ItineraryRouteMap({
           </div>
         </div>
       )}
-
-      <div className="route-mode-switch">
-        {(Object.keys(ROUTE_MODE_LABELS) as RouteMode[]).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className={`route-mode-btn ${routeMode === mode ? 'active' : ''}`}
-            onClick={() => setRouteMode(mode)}
-          >
-            {ROUTE_MODE_LABELS[mode]}
-          </button>
-        ))}
-      </div>
 
       <div className={`route-map-shell ${isMapExpanded ? 'is-expanded' : ''}`}>
         <button
@@ -2002,19 +1959,6 @@ export function ItineraryRouteMap({
               </div>
             </div>
           ))}
-        </div>
-      )}
-
-      {feasibilityChecks.length > 0 && (
-        <div className="route-feasibility-card">
-          <div className="route-feasibility-title">路线可行性校验</div>
-          <div className="route-feasibility-list">
-            {feasibilityChecks.map((note, index) => (
-              <div key={`${note}-${index}`} className="route-feasibility-item">
-                {note}
-              </div>
-            ))}
-          </div>
         </div>
       )}
 

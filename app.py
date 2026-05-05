@@ -1,11 +1,14 @@
 ﻿import sys
 import re
+import asyncio
 from datetime import date as date_cls
 from functools import lru_cache
-from typing import Any, Iterator, Optional
+from pathlib import Path
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langgraph.prebuilt.chat_agent_executor import AgentState
@@ -23,20 +26,13 @@ from itinerary import (
 from prompts import SYSTEM_PROMPT
 from state import memory_manager
 from tools.amap_base import amap_request
-from tools.amap_geo_tool import geocode_address, reverse_geocode
-from tools.amap_hotel_tool import search_hotels
-from tools.amap_nearby_tool import search_nearby_pois
-from tools.amap_poi_tool import search_pois
-from tools.amap_route_tool import plan_route
-from tools.budget_tool import estimate_budget
-from tools.rag_tool import search_travel_knowledge
-from tools.weather_tool import get_weather
 
 
 DEFAULT_SESSION_ID = "default"
 DEFAULT_USER_ID = "default_user"
 MAX_SHORT_TERM_MESSAGES = 12
 ITINERARY_TIME_BLOCKS = ("morning", "afternoon", "evening")
+MCP_SERVER_PATH = Path(__file__).with_name("mcp_server.py")
 
 GENERIC_STOP_PATTERNS = tuple(
     re.compile(pattern)
@@ -141,27 +137,26 @@ def _pre_model_hook(state: TravelAgentState) -> dict:
     }
 
 
-def build_agent():
+async def build_agent(*, checkpointer=None, store=None):
     model = _build_chat_model(temperature=0.3, timeout=60.0)
-    tools = [
-        get_weather,
-        search_pois,
-        search_hotels,
-        search_nearby_pois,
-        geocode_address,
-        reverse_geocode,
-        plan_route,
-        estimate_budget,
-        search_travel_knowledge,
-    ]
+    client = MultiServerMCPClient(
+        {
+            "travel": {
+                "command": sys.executable,
+                "args": [str(MCP_SERVER_PATH)],
+                "transport": "stdio",
+            }
+        }
+    )
+    tools = await client.get_tools()
 
     return create_react_agent(
         model=model,
         tools=tools,
         state_schema=TravelAgentState,
         pre_model_hook=_pre_model_hook,
-        checkpointer=memory_manager.checkpointer,
-        store=memory_manager.store,
+        checkpointer=checkpointer or memory_manager.checkpointer,
+        store=store or memory_manager.store,
         version="v2",
         name="travel_assistant_agent",
     )
@@ -534,13 +529,9 @@ def _prepare_agent_request(
     *,
     session_id: str,
     user_id: str,
-    client_context: str = "",
 ) -> tuple[dict, str, bool, str]:
     session_state = memory_manager.update_session_state(session_id, user_input)
     memory_context = memory_manager.build_memory_context(session_id, user_id)
-    if client_context.strip():
-        extra_context = f"前端补充上下文（用户已在界面确认）：\n{client_context.strip()}"
-        memory_context = f"{memory_context}\n\n{extra_context}".strip() if memory_context else extra_context
     structured_requested = should_generate_structured_itinerary(user_input, session_state)
     response_contract = STRUCTURED_RESPONSE_CONTRACT if structured_requested else ""
     return session_state, memory_context, structured_requested, response_contract
@@ -580,21 +571,19 @@ def _build_agent_response(
     }
 
 
-def ask_agent_with_metadata(
+async def ask_agent_with_metadata(
     agent,
     user_input: str,
     *,
     session_id: str = DEFAULT_SESSION_ID,
     user_id: str = DEFAULT_USER_ID,
-    client_context: str = "",
 ) -> dict:
     session_state, memory_context, structured_requested, response_contract = _prepare_agent_request(
         user_input,
         session_id=session_id,
         user_id=user_id,
-        client_context=client_context,
     )
-    result = agent.invoke(
+    result = await agent.ainvoke(
         _build_agent_input(
             user_input,
             memory_context=memory_context,
@@ -621,24 +610,22 @@ def ask_agent_with_metadata(
     )
 
 
-def stream_agent_with_metadata(
+async def stream_agent_with_metadata(
     agent,
     user_input: str,
     *,
     session_id: str = DEFAULT_SESSION_ID,
     user_id: str = DEFAULT_USER_ID,
-    client_context: str = "",
-) -> Iterator[dict]:
+) -> AsyncIterator[dict]:
     session_state, memory_context, structured_requested, response_contract = _prepare_agent_request(
         user_input,
         session_id=session_id,
         user_id=user_id,
-        client_context=client_context,
     )
     answer_parts: list[str] = []
     final_result: Optional[dict] = None
 
-    for mode, data in agent.stream(
+    async for mode, data in agent.astream(
         _build_agent_input(
             user_input,
             memory_context=memory_context,
@@ -685,44 +672,49 @@ def stream_agent_with_metadata(
     }
 
 
-def ask_agent(
+async def ask_agent(
     agent,
     user_input: str,
     *,
     session_id: str = DEFAULT_SESSION_ID,
     user_id: str = DEFAULT_USER_ID,
-    client_context: str = "",
 ) -> str:
-    return ask_agent_with_metadata(
+    result = await ask_agent_with_metadata(
         agent,
         user_input,
         session_id=session_id,
         user_id=user_id,
-        client_context=client_context,
-    )["answer"]
+    )
+    return result["answer"]
 
 
-def main():
-    agent = build_agent()
+async def _run_cli():
     session_id = "cli"
     user_id = "cli_user"
 
-    print("=== 智能旅游助手已启动，输入 quit 退出，输入 /reset 清空当前会话 ===")
-    while True:
-        user_input = input("\n你：").strip()
-        if not user_input:
-            continue
-        if user_input.lower() in {"quit", "exit"}:
-            break
-        if user_input == "/reset":
-            memory_manager.clear_session(session_id)
-            print("\n助手：已清空当前会话，我们可以重新开始。")
-            continue
+    async with memory_manager.async_agent_checkpointer() as checkpointer:
+        agent = await build_agent(checkpointer=checkpointer)
 
-        print(
-            "\n助手：",
-            ask_agent(agent, user_input, session_id=session_id, user_id=user_id),
-        )
+        print("=== 智能旅游助手已启动，输入 quit 退出，输入 /reset 清空当前会话 ===")
+        while True:
+            user_input = input("\n你：").strip()
+            if not user_input:
+                continue
+            if user_input.lower() in {"quit", "exit"}:
+                break
+            if user_input == "/reset":
+                memory_manager.clear_session(session_id)
+                print("\n助手：已清空当前会话，我们可以重新开始。")
+                continue
+
+            print(
+                "\n助手：",
+                await ask_agent(agent, user_input, session_id=session_id, user_id=user_id),
+            )
+
+
+def main():
+    asyncio.run(_run_cli())
 
 
 if __name__ == "__main__":

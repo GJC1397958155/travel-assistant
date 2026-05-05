@@ -1312,6 +1312,13 @@ body {
   line-height: 1.6;
 }
 
+.route-marker {
+  position: relative;
+  width: 2.125rem;
+  height: 2.125rem;
+  overflow: visible;
+}
+
 .route-marker-pin {
   width: 2.125rem;
   height: 2.125rem;
@@ -1348,6 +1355,10 @@ body {
 }
 
 .route-marker-label {
+  position: absolute;
+  left: calc(100% + 0.5rem);
+  top: 50%;
+  transform: translateY(-50%);
   padding: 0.25rem 0.5rem;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.92);

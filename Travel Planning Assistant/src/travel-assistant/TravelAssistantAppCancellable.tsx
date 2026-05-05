@@ -32,7 +32,6 @@ export default function TravelAssistantAppCancellable() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentItinerary, setCurrentItinerary] = useState<StructuredItinerary | undefined>();
-  const [routeClientContext, setRouteClientContext] = useState('');
   const [sessionState, setSessionState] = useState<SessionState | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [shouldScrollItinerary, setShouldScrollItinerary] = useState(false);
@@ -101,7 +100,6 @@ export default function TravelAssistantAppCancellable() {
           message: messageText,
           session_id: sessionId,
           user_id: userId,
-          client_context: buildClientContext(currentItinerary, routeClientContext),
         },
         {
           signal: requestController.signal,
@@ -236,12 +234,7 @@ export default function TravelAssistantAppCancellable() {
           </button>
 
           <div className="side-panel">
-            <ItineraryPanel
-              itinerary={currentItinerary}
-              shouldScroll={shouldScrollItinerary}
-              onItineraryChange={setCurrentItinerary}
-              onClientContextChange={setRouteClientContext}
-            />
+            <ItineraryPanel itinerary={currentItinerary} shouldScroll={shouldScrollItinerary} />
           </div>
         </div>
       </div>

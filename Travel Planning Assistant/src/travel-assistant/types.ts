@@ -2,7 +2,6 @@ export interface ChatRequest {
   message: string;
   session_id: string;
   user_id: string;
-  client_context?: string;
 }
 
 export interface MapCandidate {

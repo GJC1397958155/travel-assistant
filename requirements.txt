@@ -1,7 +1,17 @@
+# MCP SDK requires Python 3.10 or newer.
 langchain
 langchain-openai
+langchain-chroma
+langchain-text-splitters
+chromadb
+sentence-transformers
+rank-bm25
+jieba
 langgraph
 langgraph-checkpoint-sqlite
+langchain-mcp-adapters
+mcp
+aiosqlite
 fastapi
 uvicorn
 python-dotenv

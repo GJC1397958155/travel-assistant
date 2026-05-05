@@ -1,0 +1,182 @@
+[
+  {
+    "question": "帮我规划北京3天亲子研学游，要求少走回头路。",
+    "expected_city": "北京",
+    "expected_sources_contains": [
+      "北京"
+    ],
+    "expected_keywords": [
+      "故宫博物院",
+      "天坛公园",
+      "颐和园"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "杭州2天适合父母的轻松游怎么安排？",
+    "expected_city": "杭州",
+    "expected_sources_contains": [
+      "杭州"
+    ],
+    "expected_keywords": [
+      "西湖",
+      "灵隐寺",
+      "河坊街"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "上海雨天适合怎么玩，最好以室内为主。",
+    "expected_city": "上海",
+    "expected_sources_contains": [
+      "上海"
+    ],
+    "expected_keywords": [
+      "外滩",
+      "上海博物馆",
+      "豫园"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "成都2天懒人休闲美食游怎么安排？",
+    "expected_city": "成都",
+    "expected_sources_contains": [
+      "成都"
+    ],
+    "expected_keywords": [
+      "宽窄巷子",
+      "武侯祠",
+      "锦里"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "西安2天历史文化游有哪些必去景点？",
+    "expected_city": "西安",
+    "expected_sources_contains": [
+      "西安"
+    ],
+    "expected_keywords": [
+      "秦始皇帝陵博物院",
+      "西安城墙",
+      "大雁塔"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "三亚情侣海岛度假3天怎么规划？",
+    "expected_city": "三亚",
+    "expected_sources_contains": [
+      "三亚"
+    ],
+    "expected_keywords": [
+      "亚龙湾",
+      "天涯海角",
+      "南山文化旅游区"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "桂林2天山水摄影路线怎么安排？",
+    "expected_city": "桂林",
+    "expected_sources_contains": [
+      "桂林"
+    ],
+    "expected_keywords": [
+      "漓江",
+      "象鼻山",
+      "阳朔西街"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "哈尔滨冬季冰雪游要注意什么？",
+    "expected_city": "哈尔滨",
+    "expected_sources_contains": [
+      "哈尔滨"
+    ],
+    "expected_keywords": [
+      "中央大街",
+      "圣索菲亚教堂",
+      "冰雪大世界"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "拉萨高原旅行有哪些安全提示？",
+    "expected_city": "拉萨",
+    "expected_sources_contains": [
+      "拉萨"
+    ],
+    "expected_keywords": [
+      "布达拉宫",
+      "大昭寺",
+      "八廓街"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  },
+  {
+    "question": "香港亲子3天游怎么安排？",
+    "expected_city": "香港",
+    "expected_sources_contains": [
+      "香港"
+    ],
+    "expected_keywords": [
+      "维多利亚港",
+      "太平山顶",
+      "香港迪士尼乐园"
+    ],
+    "metrics": [
+      "Recall@5",
+      "ContextPrecision",
+      "Faithfulness",
+      "AnswerRelevancy"
+    ]
+  }
+]

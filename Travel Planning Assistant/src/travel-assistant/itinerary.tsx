@@ -335,15 +335,11 @@ function AlternativesSection({ alternatives }: { alternatives: string[] }) {
 interface ItineraryPanelProps {
   itinerary?: StructuredItinerary;
   shouldScroll?: boolean;
-  onItineraryChange?: (next: StructuredItinerary) => void;
-  onClientContextChange?: (context: string) => void;
 }
 
 export function ItineraryPanel({
   itinerary,
   shouldScroll,
-  onItineraryChange,
-  onClientContextChange,
 }: ItineraryPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -414,11 +410,7 @@ export function ItineraryPanel({
 
       <div className="itinerary-content">
         <ItineraryOverview itinerary={itinerary} />
-        <ItineraryRouteMap
-          itinerary={itinerary}
-          onItineraryChange={onItineraryChange}
-          onClientContextChange={onClientContextChange}
-        />
+        <ItineraryRouteMap itinerary={itinerary} />
 
         {itinerary.daily_plans && itinerary.daily_plans.length > 0 && (
           <DailyPlans plans={itinerary.daily_plans} />

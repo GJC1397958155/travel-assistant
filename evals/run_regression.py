@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from datetime import date as date_cls, timedelta
@@ -109,7 +110,7 @@ def run_offline_case(case: dict[str, Any]) -> list[str]:
     return errors
 
 
-def run_live_case(case: dict[str, Any], agent) -> list[str]:
+async def run_live_case(case: dict[str, Any], agent) -> list[str]:
     from app import ask_agent_with_metadata
 
     errors = []
@@ -120,7 +121,7 @@ def run_live_case(case: dict[str, Any], agent) -> list[str]:
     except Exception:
         pass
 
-    result = ask_agent_with_metadata(
+    result = await ask_agent_with_metadata(
         agent,
         case["user_input"],
         session_id=session_id,
@@ -141,7 +142,7 @@ def model_dump(model: Any) -> dict[str, Any]:
     return model.dict()
 
 
-def main() -> int:
+async def main() -> int:
     parser = argparse.ArgumentParser(description="Run regression checks for the travel assistant.")
     parser.add_argument("--live", action="store_true", help="Run live end-to-end checks with the configured model and APIs.")
     parser.add_argument("--case", default="", help="Only run cases whose id contains this keyword.")
@@ -156,19 +157,35 @@ def main() -> int:
     if args.live:
         from app import build_agent
 
-        agent = build_agent()
+        async with memory_manager.async_agent_checkpointer() as checkpointer:
+            agent = await build_agent(checkpointer=checkpointer)
+
+            failures = 0
+            for case in cases:
+                errors = await run_live_case(case, agent)
+                if errors:
+                    failures += 1
+                    print(f"[FAIL] {case['id']}")
+                    for error in errors:
+                        print(f"  - {error}")
+                else:
+                    print(f"[PASS] {case['id']} (live)")
+
+            total = len(cases)
+            passed = total - failures
+            print(f"\nSummary: {passed}/{total} cases passed.")
+            return 1 if failures else 0
 
     failures = 0
     for case in cases:
-        errors = run_live_case(case, agent) if args.live else run_offline_case(case)
+        errors = run_offline_case(case)
         if errors:
             failures += 1
             print(f"[FAIL] {case['id']}")
             for error in errors:
                 print(f"  - {error}")
         else:
-            mode = "live" if args.live else "offline"
-            print(f"[PASS] {case['id']} ({mode})")
+            print(f"[PASS] {case['id']} (offline)")
 
     total = len(cases)
     passed = total - failures
@@ -177,4 +194,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(asyncio.run(main()))

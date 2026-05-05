@@ -4,7 +4,7 @@ import atexit
 from copy import deepcopy
 import re
 import sqlite3
-from contextlib import ExitStack
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
@@ -13,6 +13,7 @@ from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.memory import InMemoryStore
 from langgraph.store.sqlite import SqliteStore
 
@@ -158,6 +159,28 @@ class TravelMemoryManager:
             finally:
                 conn.close()
 
+    def _checkpoint_path(self) -> str:
+        return str((self.memory_dir / "short_term_memory.sqlite").resolve())
+
+    def _store_path(self) -> str:
+        return str((self.memory_dir / "long_term_memory.sqlite").resolve())
+
+    @asynccontextmanager
+    async def async_agent_checkpointer(self):
+        if self.runtime.backend_name == "memory":
+            yield InMemorySaver()
+            return
+
+        try:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint_path = self._checkpoint_path()
+            self._probe_sqlite_writable(checkpoint_path)
+            async with AsyncSqliteSaver.from_conn_string(checkpoint_path) as checkpointer:
+                await checkpointer.setup()
+                yield checkpointer
+        except Exception:
+            yield InMemorySaver()
+
     def clear_session(self, session_id: str) -> None:
         with self._lock:
             try:
@@ -283,8 +306,8 @@ class TravelMemoryManager:
 
         try:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
-            checkpoint_path = str((self.memory_dir / "short_term_memory.sqlite").resolve())
-            store_path = str((self.memory_dir / "long_term_memory.sqlite").resolve())
+            checkpoint_path = self._checkpoint_path()
+            store_path = self._store_path()
             checkpointer = self._stack.enter_context(SqliteSaver.from_conn_string(checkpoint_path))
             store = self._stack.enter_context(SqliteStore.from_conn_string(store_path))
             checkpointer.setup()

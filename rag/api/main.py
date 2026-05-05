@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from queue import Empty, Queue
-from threading import Thread
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI
@@ -18,9 +17,18 @@ from app import (
     build_agent,
     stream_agent_with_metadata,
 )
+from state import memory_manager
 from tools.amap_base import amap_request
 
-app = FastAPI(title="Travel Assistant API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with memory_manager.async_agent_checkpointer() as checkpointer:
+        app.state.agent = await build_agent(checkpointer=checkpointer)
+        yield
+
+
+app = FastAPI(title="Travel Assistant API", lifespan=lifespan)
 
 cors_allow_origins = [
     origin.strip()
@@ -39,19 +47,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-agent = build_agent()
-
-
 class ChatRequest(BaseModel):
     message: str
     session_id: str = DEFAULT_SESSION_ID
     user_id: str = DEFAULT_USER_ID
-    client_context: Optional[str] = None
 
 
 class RoutePoint(BaseModel):
-    longitude: float
-    latitude: float
+    longitude: Optional[float] = None
+    latitude: Optional[float] = None
+    lng: Optional[float] = None
+    lat: Optional[float] = None
 
 
 class MapRouteRequest(BaseModel):
@@ -144,10 +150,20 @@ def _extract_transit_route(route_data: dict) -> tuple[list[list[float]], Optiona
 
 
 def _fallback_path(origin: RoutePoint, destination: RoutePoint) -> list[list[float]]:
+    origin_longitude, origin_latitude = _resolve_route_point(origin)
+    destination_longitude, destination_latitude = _resolve_route_point(destination)
     return [
-        [origin.longitude, origin.latitude],
-        [destination.longitude, destination.latitude],
+        [origin_longitude, origin_latitude],
+        [destination_longitude, destination_latitude],
     ]
+
+
+def _resolve_route_point(point: RoutePoint) -> tuple[float, float]:
+    longitude = point.longitude if point.longitude is not None else point.lng
+    latitude = point.latitude if point.latitude is not None else point.lat
+    if longitude is None or latitude is None:
+        raise ValueError("地图路线接口缺少坐标字段，请提供 longitude/latitude 或 lng/lat。")
+    return float(longitude), float(latitude)
 
 
 def _format_sse(event: str, payload: dict) -> str:
@@ -155,59 +171,31 @@ def _format_sse(event: str, payload: dict) -> str:
 
 
 @app.post("/chat")
-def chat(req: ChatRequest):
-    return ask_agent_with_metadata(
-        agent,
+async def chat(req: ChatRequest):
+    return await ask_agent_with_metadata(
+        app.state.agent,
         req.message,
         session_id=req.session_id,
         user_id=req.user_id,
-        client_context=req.client_context,
     )
 
 
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest):
-    def event_stream():
-        queue: Queue[tuple[str, dict | None]] = Queue()
-
-        def producer():
-            try:
-                for item in stream_agent_with_metadata(
-                    agent,
-                    req.message,
-                    session_id=req.session_id,
-                    user_id=req.user_id,
-                    client_context=req.client_context,
-                ):
-                    queue.put(("message", item))
-            except Exception as exc:
-                queue.put(("error", {"message": str(exc)}))
-            finally:
-                queue.put(("done", None))
-
-        Thread(target=producer, daemon=True).start()
-
+    async def event_stream():
         yield _format_sse("status", {"stage": "started"})
-
-        while True:
-            try:
-                kind, payload = queue.get(timeout=10.0)
-            except Empty:
-                yield _format_sse("status", {"stage": "heartbeat"})
-                continue
-
-            if kind == "message" and payload is not None:
-                body = dict(payload)
+        try:
+            async for item in stream_agent_with_metadata(
+                app.state.agent,
+                req.message,
+                session_id=req.session_id,
+                user_id=req.user_id,
+            ):
+                body = dict(item)
                 event = str(body.pop("event", "message"))
                 yield _format_sse(event, body)
-                continue
-
-            if kind == "error" and payload is not None:
-                yield _format_sse("error", payload)
-                continue
-
-            if kind == "done":
-                break
+        except Exception as exc:
+            yield _format_sse("error", {"message": str(exc)})
 
     return StreamingResponse(
         event_stream(),
@@ -226,9 +214,12 @@ def map_route(req: MapRouteRequest):
     if mode not in ROUTE_MODE_TO_PATH:
         mode = "walking"
 
+    origin_longitude, origin_latitude = _resolve_route_point(req.origin)
+    destination_longitude, destination_latitude = _resolve_route_point(req.destination)
+
     params = {
-        "origin": f"{req.origin.longitude},{req.origin.latitude}",
-        "destination": f"{req.destination.longitude},{req.destination.latitude}",
+        "origin": f"{origin_longitude},{origin_latitude}",
+        "destination": f"{destination_longitude},{destination_latitude}",
     }
     if mode == "transit" and req.city.strip():
         params["city"] = req.city.strip()
