@@ -11,7 +11,12 @@ export class ChatApiError extends Error {
 
 export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 180000);
+  let timeoutId = 0;
+  const refreshTimeout = () => {
+    window.clearTimeout(timeoutId);
+    timeoutId = window.setTimeout(() => controller.abort(), 180000);
+  };
+  refreshTimeout();
 
   try {
     const response = await fetch(`${API_BASE_URL}/chat`, {
@@ -22,6 +27,7 @@ export async function sendChatMessage(request: ChatRequest): Promise<ChatRespons
       signal: controller.signal,
       body: JSON.stringify(request),
     });
+    refreshTimeout();
 
     if (!response.ok) {
       let errorMessage = `请求失败: ${response.status} ${response.statusText}`;

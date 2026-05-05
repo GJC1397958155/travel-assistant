@@ -1,4 +1,5 @@
 ﻿import sys
+import re
 from datetime import date as date_cls
 from functools import lru_cache
 from typing import Any, Iterator, Optional
@@ -21,6 +22,7 @@ from itinerary import (
 )
 from prompts import SYSTEM_PROMPT
 from state import memory_manager
+from tools.amap_base import amap_request
 from tools.amap_geo_tool import geocode_address, reverse_geocode
 from tools.amap_hotel_tool import search_hotels
 from tools.amap_nearby_tool import search_nearby_pois
@@ -34,6 +36,47 @@ from tools.weather_tool import get_weather
 DEFAULT_SESSION_ID = "default"
 DEFAULT_USER_ID = "default_user"
 MAX_SHORT_TERM_MESSAGES = 12
+ITINERARY_TIME_BLOCKS = ("morning", "afternoon", "evening")
+
+GENERIC_STOP_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"酒店",
+        r"早餐",
+        r"午餐",
+        r"晚餐",
+        r"用餐",
+        r"自由活动",
+        r"返程",
+        r"休息",
+        r"入住",
+        r"出发",
+        r"集合",
+    )
+)
+
+STOP_DECORATOR_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bcitywalk\b",
+        r"打卡",
+        r"漫步",
+        r"散步",
+        r"闲逛",
+        r"赏景",
+        r"看夜景",
+        r"拍照",
+        r"拍照点",
+        r"早餐",
+        r"午餐",
+        r"晚餐",
+        r"用餐",
+        r"休息",
+        r"入住",
+        r"出发",
+        r"返程",
+    )
+)
 
 
 class TravelAgentState(AgentState):
@@ -158,12 +201,306 @@ def _model_dump(model: Any) -> dict:
     return model.dict()
 
 
+def _normalize_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_amap_location(value: str) -> Optional[tuple[float, float]]:
+    if not value:
+        return None
+    parts = [part.strip() for part in str(value).split(",")]
+    if len(parts) < 2:
+        return None
+    lng = _safe_float(parts[0])
+    lat = _safe_float(parts[1])
+    if lng is None or lat is None:
+        return None
+    return lng, lat
+
+
+def _is_useful_stop_query(query: str) -> bool:
+    return bool(query) and len(query) >= 2 and not any(
+        pattern.search(query) for pattern in GENERIC_STOP_PATTERNS
+    )
+
+
+def _dedupe_queries(queries: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for raw_query in queries:
+        query = _normalize_text(raw_query)
+        if not _is_useful_stop_query(query):
+            continue
+        lowered = query.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(query)
+    return deduped
+
+
+def _strip_stop_decorators(query: str) -> str:
+    cleaned = _normalize_text(query)
+    cleaned = re.sub(r"[()（）【】\[\]]", " ", cleaned)
+    cleaned = re.sub(r"[·•/|]", " ", cleaned)
+    cleaned = re.sub(r"[，、。；;:：]", " ", cleaned)
+    for pattern in STOP_DECORATOR_PATTERNS:
+        cleaned = pattern.sub(" ", cleaned)
+    return _normalize_text(cleaned)
+
+
+def _build_stop_queries(location: str, title: str) -> list[str]:
+    normalized_location = _normalize_text(location)
+    normalized_title = _normalize_text(title)
+    clean_location = _strip_stop_decorators(normalized_location)
+    clean_title = _strip_stop_decorators(normalized_title)
+    return _dedupe_queries(
+        [
+            normalized_location,
+            normalized_title,
+            clean_location,
+            clean_title,
+            *clean_location.split(),
+            *clean_title.split(),
+        ]
+    )
+
+
+def _build_address_queries(query: str, destination: str) -> list[str]:
+    clean_query = _normalize_text(query)
+    clean_destination = _normalize_text(destination)
+    if not clean_query:
+        return []
+    if not clean_destination or clean_destination in clean_query:
+        return [clean_query]
+    return _dedupe_queries(
+        [
+            f"{clean_destination}{clean_query}",
+            f"{clean_destination} {clean_query}",
+            clean_query,
+        ]
+    )
+
+
+def _format_candidate_address(item: dict[str, Any]) -> str:
+    address = _normalize_text(item.get("address"))
+    district = _normalize_text(item.get("adname") or item.get("district"))
+    city = _normalize_text(item.get("cityname") or item.get("city"))
+    province = _normalize_text(item.get("pname") or item.get("province"))
+
+    if address:
+        return address
+
+    parts: list[str] = []
+    for part in (province, city, district):
+        if part and part not in parts:
+            parts.append(part)
+    return "".join(parts)
+
+
+def _poi_to_candidate(poi: dict[str, Any]) -> Optional[dict[str, Any]]:
+    coordinates = _parse_amap_location(str(poi.get("location", "") or ""))
+    if not coordinates:
+        return None
+
+    lng, lat = coordinates
+    formatted_address = _format_candidate_address(poi)
+    return {
+        "name": _normalize_text(poi.get("name")),
+        "formatted_address": formatted_address,
+        "address": formatted_address,
+        "longitude": lng,
+        "latitude": lat,
+        "poi_id": _normalize_text(poi.get("id")),
+        "source": "poi",
+    }
+
+
+def _geocode_to_candidate(geocode: dict[str, Any]) -> Optional[dict[str, Any]]:
+    coordinates = _parse_amap_location(str(geocode.get("location", "") or ""))
+    if not coordinates:
+        return None
+
+    lng, lat = coordinates
+    formatted_address = _normalize_text(geocode.get("formatted_address"))
+    return {
+        "name": _normalize_text(geocode.get("formatted_address")),
+        "formatted_address": formatted_address,
+        "address": formatted_address,
+        "longitude": lng,
+        "latitude": lat,
+        "poi_id": "",
+        "source": "geocode",
+    }
+
+
+def _search_poi_candidates(
+    query: str,
+    destination: str,
+    cache: dict[tuple[str, str, str], Any],
+) -> list[dict[str, Any]]:
+    cache_key = ("poi", destination, query)
+    if cache_key in cache:
+        return cache[cache_key]
+
+    request_params = {
+        "keywords": query,
+        "extensions": "base",
+        "offset": 5,
+        "page": 1,
+    }
+    if destination:
+        request_params["city"] = destination
+        request_params["citylimit"] = "true"
+
+    data = amap_request("/v3/place/text", request_params)
+    seen: set[str] = set()
+    candidates: list[dict[str, Any]] = []
+    for poi in data.get("pois", []) or []:
+        candidate = _poi_to_candidate(poi)
+        if not candidate:
+            continue
+        unique_key = candidate["poi_id"] or f'{candidate["name"]}|{candidate["formatted_address"]}'
+        if unique_key in seen:
+            continue
+        seen.add(unique_key)
+        candidates.append(candidate)
+        if len(candidates) >= 4:
+            break
+
+    cache[cache_key] = candidates
+    return candidates
+
+
+def _geocode_candidate(
+    query: str,
+    destination: str,
+    cache: dict[tuple[str, str, str], Any],
+) -> Optional[dict[str, Any]]:
+    cache_key = ("geo", destination, query)
+    if cache_key in cache:
+        return cache[cache_key]
+
+    data = amap_request(
+        "/v3/geocode/geo",
+        {
+            "address": query,
+            "city": destination,
+        },
+    )
+    geocodes = data.get("geocodes", []) or []
+    candidate = _geocode_to_candidate(geocodes[0]) if geocodes else None
+    cache[cache_key] = candidate
+    return candidate
+
+
+def _apply_geo_candidate(
+    activity: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    query: str,
+    candidates: list[dict[str, Any]],
+) -> None:
+    activity["longitude"] = candidate.get("longitude")
+    activity["latitude"] = candidate.get("latitude")
+    activity["poi_id"] = candidate.get("poi_id", "") or ""
+    activity["formatted_address"] = candidate.get("formatted_address", "") or ""
+    activity["map_query"] = query
+    activity["map_source"] = candidate.get("source", "")
+    activity["map_candidates"] = candidates[:3]
+
+
+def _enrich_activity_geo(
+    activity: dict[str, Any],
+    *,
+    destination: str,
+    cache: dict[tuple[str, str, str], Any],
+) -> None:
+    existing_lng = _safe_float(activity.get("longitude"))
+    existing_lat = _safe_float(activity.get("latitude"))
+    if existing_lng is not None and existing_lat is not None:
+        activity["longitude"] = existing_lng
+        activity["latitude"] = existing_lat
+        activity["map_candidates"] = list(activity.get("map_candidates") or [])
+        return
+
+    queries = _build_stop_queries(
+        _normalize_text(activity.get("location")),
+        _normalize_text(activity.get("title")),
+    )
+    if not queries:
+        activity["map_candidates"] = list(activity.get("map_candidates") or [])
+        return
+
+    best_candidates: list[dict[str, Any]] = []
+    for query in queries[:4]:
+        try:
+            candidates = _search_poi_candidates(query, destination, cache)
+        except Exception:
+            candidates = []
+        if candidates:
+            best_candidates = candidates[:3]
+            _apply_geo_candidate(activity, best_candidates[0], query=query, candidates=best_candidates)
+            return
+
+    address_queries = _dedupe_queries(
+        [
+            address_query
+            for query in queries[:4]
+            for address_query in _build_address_queries(query, destination)
+        ]
+    )
+    for address_query in address_queries[:5]:
+        try:
+            candidate = _geocode_candidate(address_query, destination, cache)
+        except Exception:
+            candidate = None
+        if candidate:
+            _apply_geo_candidate(activity, candidate, query=address_query, candidates=best_candidates)
+            return
+
+    activity["map_candidates"] = best_candidates
+
+
+def _enrich_structured_itinerary_geo(itinerary: dict[str, Any], *, session_state: dict[str, Any]) -> dict:
+    if itinerary.get("status") != "ready":
+        return itinerary
+
+    destination = _normalize_text(itinerary.get("destination") or session_state.get("city"))
+    cache: dict[tuple[str, str, str], Any] = {}
+    daily_plans = itinerary.get("daily_plans") or []
+
+    try:
+        for day in daily_plans:
+            if not isinstance(day, dict):
+                continue
+            for block_name in ITINERARY_TIME_BLOCKS:
+                activities = day.get(block_name) or []
+                if not isinstance(activities, list):
+                    continue
+                for activity in activities:
+                    if isinstance(activity, dict):
+                        _enrich_activity_geo(activity, destination=destination, cache=cache)
+    except Exception:
+        return itinerary
+
+    return itinerary
+
+
 def build_structured_itinerary_with_model(
     user_input: str,
     session_state: dict,
     answer: str,
 ) -> dict:
     fallback = build_fallback_itinerary(session_state=session_state, raw_text=answer)
+    fallback_dict = _model_dump(fallback)
 
     try:
         formatter_prompt = build_formatter_user_prompt(
@@ -183,10 +520,13 @@ def build_structured_itinerary_with_model(
             raw_text=answer,
         )
         if structured is None:
-            return _model_dump(fallback)
-        return _model_dump(structured)
+            return _enrich_structured_itinerary_geo(fallback_dict, session_state=session_state)
+        return _enrich_structured_itinerary_geo(
+            _model_dump(structured),
+            session_state=session_state,
+        )
     except Exception:
-        return _model_dump(fallback)
+        return _enrich_structured_itinerary_geo(fallback_dict, session_state=session_state)
 
 
 def _prepare_agent_request(
@@ -194,9 +534,13 @@ def _prepare_agent_request(
     *,
     session_id: str,
     user_id: str,
+    client_context: str = "",
 ) -> tuple[dict, str, bool, str]:
     session_state = memory_manager.update_session_state(session_id, user_input)
     memory_context = memory_manager.build_memory_context(session_id, user_id)
+    if client_context.strip():
+        extra_context = f"前端补充上下文（用户已在界面确认）：\n{client_context.strip()}"
+        memory_context = f"{memory_context}\n\n{extra_context}".strip() if memory_context else extra_context
     structured_requested = should_generate_structured_itinerary(user_input, session_state)
     response_contract = STRUCTURED_RESPONSE_CONTRACT if structured_requested else ""
     return session_state, memory_context, structured_requested, response_contract
@@ -242,11 +586,13 @@ def ask_agent_with_metadata(
     *,
     session_id: str = DEFAULT_SESSION_ID,
     user_id: str = DEFAULT_USER_ID,
+    client_context: str = "",
 ) -> dict:
     session_state, memory_context, structured_requested, response_contract = _prepare_agent_request(
         user_input,
         session_id=session_id,
         user_id=user_id,
+        client_context=client_context,
     )
     result = agent.invoke(
         _build_agent_input(
@@ -281,11 +627,13 @@ def stream_agent_with_metadata(
     *,
     session_id: str = DEFAULT_SESSION_ID,
     user_id: str = DEFAULT_USER_ID,
+    client_context: str = "",
 ) -> Iterator[dict]:
     session_state, memory_context, structured_requested, response_contract = _prepare_agent_request(
         user_input,
         session_id=session_id,
         user_id=user_id,
+        client_context=client_context,
     )
     answer_parts: list[str] = []
     final_result: Optional[dict] = None
@@ -343,12 +691,14 @@ def ask_agent(
     *,
     session_id: str = DEFAULT_SESSION_ID,
     user_id: str = DEFAULT_USER_ID,
+    client_context: str = "",
 ) -> str:
     return ask_agent_with_metadata(
         agent,
         user_input,
         session_id=session_id,
         user_id=user_id,
+        client_context=client_context,
     )["answer"]
 
 

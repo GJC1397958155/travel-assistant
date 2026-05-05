@@ -6,10 +6,25 @@ import {
   sendChatMessage,
 } from './apiRuntime';
 import { ItineraryPanel } from './itinerary';
+import { createProcessingItinerary, shouldShowProcessingItinerary } from './itineraryState';
 import MemoryDropdown from './MemoryDropdown';
 import { ChatArea, Header } from './shellRuntime';
 import { Message, SessionState, StructuredItinerary } from './types';
 import '../styles/app.css';
+
+function buildClientContext(itinerary?: StructuredItinerary, routeContext?: string): string {
+  const parts: string[] = [];
+
+  if (itinerary?.status === 'ready' && itinerary.destination) {
+    parts.push(`当前已确认行程目的地：${itinerary.destination}`);
+  }
+
+  if (routeContext?.trim()) {
+    parts.push(routeContext.trim());
+  }
+
+  return parts.join('\n\n').trim();
+}
 
 export default function TravelAssistantAppCancellable() {
   const [sessionId, setSessionId] = useState('demo-session');
@@ -17,6 +32,7 @@ export default function TravelAssistantAppCancellable() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentItinerary, setCurrentItinerary] = useState<StructuredItinerary | undefined>();
+  const [routeClientContext, setRouteClientContext] = useState('');
   const [sessionState, setSessionState] = useState<SessionState | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [shouldScrollItinerary, setShouldScrollItinerary] = useState(false);
@@ -57,6 +73,12 @@ export default function TravelAssistantAppCancellable() {
 
     setError(null);
     setShouldScrollItinerary(false);
+    const previousItinerary = currentItinerary;
+    const shouldSwitchToProcessing = shouldShowProcessingItinerary(messageText, currentItinerary);
+
+    if (shouldSwitchToProcessing) {
+      setCurrentItinerary(createProcessingItinerary());
+    }
 
     const userMessage: Message = {
       id: `user-${Date.now()}`,
@@ -79,6 +101,7 @@ export default function TravelAssistantAppCancellable() {
           message: messageText,
           session_id: sessionId,
           user_id: userId,
+          client_context: buildClientContext(currentItinerary, routeClientContext),
         },
         {
           signal: requestController.signal,
@@ -131,6 +154,8 @@ export default function TravelAssistantAppCancellable() {
       if (response.structured_itinerary) {
         setCurrentItinerary(response.structured_itinerary);
         setShouldScrollItinerary(true);
+      } else if (shouldSwitchToProcessing) {
+        setCurrentItinerary(previousItinerary);
       }
 
       if (response.session_state) {
@@ -138,6 +163,9 @@ export default function TravelAssistantAppCancellable() {
       }
     } catch (err) {
       if (err instanceof ChatRequestCancelledError) {
+        if (shouldSwitchToProcessing) {
+          setCurrentItinerary(previousItinerary);
+        }
         setMessages((prev) => [
           ...prev,
           {
@@ -154,6 +182,9 @@ export default function TravelAssistantAppCancellable() {
         err instanceof ChatApiError ? err.message : '发送消息失败，请稍后重试。';
 
       setError(errorMessage);
+      if (shouldSwitchToProcessing) {
+        setCurrentItinerary(previousItinerary);
+      }
 
       const errorMessageBubble: Message = {
         id: `error-${Date.now()}`,
@@ -205,7 +236,12 @@ export default function TravelAssistantAppCancellable() {
           </button>
 
           <div className="side-panel">
-            <ItineraryPanel itinerary={currentItinerary} shouldScroll={shouldScrollItinerary} />
+            <ItineraryPanel
+              itinerary={currentItinerary}
+              shouldScroll={shouldScrollItinerary}
+              onItineraryChange={setCurrentItinerary}
+              onClientContextChange={setRouteClientContext}
+            />
           </div>
         </div>
       </div>

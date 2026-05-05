@@ -109,11 +109,17 @@ export async function sendChatMessage(
 ): Promise<ChatResponse> {
   const requestController = new AbortController();
   const timeoutMs = options.timeoutMs ?? 180000;
+  let timeoutId = 0;
 
   const abortWithReason = (reason: string) => {
     if (!requestController.signal.aborted) {
       requestController.abort(reason);
     }
+  };
+
+  const refreshTimeout = () => {
+    window.clearTimeout(timeoutId);
+    timeoutId = window.setTimeout(() => abortWithReason('timeout'), timeoutMs);
   };
 
   const handleExternalAbort = () => {
@@ -130,7 +136,7 @@ export async function sendChatMessage(
     }
   }
 
-  const timeoutId = window.setTimeout(() => abortWithReason('timeout'), timeoutMs);
+  refreshTimeout();
 
   try {
     const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -141,6 +147,7 @@ export async function sendChatMessage(
       signal: requestController.signal,
       body: JSON.stringify(request),
     });
+    refreshTimeout();
 
     if (!response.ok) {
       let errorMessage = `请求失败: ${response.status} ${response.statusText}`;
@@ -209,6 +216,7 @@ export async function sendChatMessage(
 
     while (true) {
       const { value, done } = await reader.read();
+      refreshTimeout();
       buffer += decoder.decode(value, { stream: !done });
 
       const parsed = splitSseFrames(buffer);

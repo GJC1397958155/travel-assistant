@@ -2,12 +2,30 @@ export interface ChatRequest {
   message: string;
   session_id: string;
   user_id: string;
+  client_context?: string;
+}
+
+export interface MapCandidate {
+  name?: string;
+  address?: string;
+  formatted_address?: string;
+  longitude?: number;
+  latitude?: number;
+  poi_id?: string;
+  source?: string;
 }
 
 export interface Activity {
   title: string;
   location?: string;
   reason?: string;
+  longitude?: number;
+  latitude?: number;
+  poi_id?: string;
+  formatted_address?: string;
+  map_query?: string;
+  map_source?: string;
+  map_candidates?: MapCandidate[];
 }
 
 export interface DailyPlan {

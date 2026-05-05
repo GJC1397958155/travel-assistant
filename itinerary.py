@@ -202,6 +202,27 @@ def normalize_structured_itinerary(
     if raw_text:
         itinerary.raw_text = raw_text
 
+    parsed_from_text = _parse_freeform_itinerary_text(raw_text, session_state=session_state)
+    if parsed_from_text is not None:
+        if not itinerary.overview:
+            itinerary.overview = parsed_from_text.overview
+        if not itinerary.weather_summary:
+            itinerary.weather_summary = parsed_from_text.weather_summary
+        if not itinerary.daily_plans:
+            itinerary.daily_plans = parsed_from_text.daily_plans
+        if (
+            not itinerary.hotel_suggestion.area
+            and not itinerary.hotel_suggestion.reason
+            and not itinerary.hotel_suggestion.candidates
+        ):
+            itinerary.hotel_suggestion = parsed_from_text.hotel_suggestion
+        if not itinerary.budget_advice.level and not itinerary.budget_advice.summary:
+            itinerary.budget_advice = parsed_from_text.budget_advice
+        if not itinerary.alerts:
+            itinerary.alerts = parsed_from_text.alerts
+        if not itinerary.alternatives:
+            itinerary.alternatives = parsed_from_text.alternatives
+
     if itinerary.days and not itinerary.daily_plans and itinerary.status == "ready":
         itinerary.daily_plans = _build_placeholder_day_plans(int(itinerary.days), raw_text)
 
@@ -229,6 +250,7 @@ def build_fallback_itinerary(
         if not missing_questions and session_state.get("city") and session_state.get("days")
         else "needs_clarification"
     )
+    parsed_from_text = _parse_freeform_itinerary_text(raw_text, session_state=session_state)
     itinerary = StructuredItinerary(
         status=status,
         destination=str(session_state.get("city", "") or ""),
@@ -237,13 +259,394 @@ def build_fallback_itinerary(
         companions=str(session_state.get("companions", "") or ""),
         travel_style=str(session_state.get("pace", "") or ""),
         budget=session_state.get("budget"),
-        overview=_compact_text(raw_text, limit=180),
+        overview=(
+            parsed_from_text.overview
+            if parsed_from_text and parsed_from_text.overview
+            else _compact_text(raw_text, limit=180)
+        ),
+        weather_summary=parsed_from_text.weather_summary if parsed_from_text else "",
+        daily_plans=parsed_from_text.daily_plans if parsed_from_text and status == "ready" else [],
+        hotel_suggestion=parsed_from_text.hotel_suggestion if parsed_from_text else HotelSuggestion(),
+        budget_advice=parsed_from_text.budget_advice if parsed_from_text else BudgetAdvice(),
+        alerts=parsed_from_text.alerts if parsed_from_text else [],
+        alternatives=parsed_from_text.alternatives if parsed_from_text else [],
         raw_text=raw_text,
         follow_up_questions=missing_questions if status != "ready" else [],
     )
     if itinerary.status == "ready" and itinerary.days:
-        itinerary.daily_plans = _build_placeholder_day_plans(int(itinerary.days), raw_text)
+        if not itinerary.daily_plans:
+            itinerary.daily_plans = _build_placeholder_day_plans(int(itinerary.days), raw_text)
     return itinerary
+
+
+DAY_HEADING_RE = re.compile(r"^第\s*([0-9零〇一二两三四五六七八九十百]+)\s*天(?:\s*[:：\-]\s*|\s+)?(.*)$")
+TIME_HEADING_ALIASES = {
+    "morning": ("上午", "早上", "早晨", "清晨"),
+    "afternoon": ("中午", "午间", "下午", "午后"),
+    "evening": ("傍晚", "晚上", "夜间", "夜晚"),
+}
+TEXT_SECTION_ALIASES = {
+    "overview": ("行程概览", "概览", "路线概览", "整体思路"),
+    "weather_summary": ("天气概览", "天气提示", "天气建议", "天气"),
+    "hotel": ("酒店区域建议", "住宿区域建议", "住宿建议", "酒店建议", "住哪里"),
+    "budget": ("预算建议", "预算", "花费建议", "费用建议"),
+    "alerts": ("注意事项", "温馨提示", "提醒", "出行提示"),
+    "alternatives": ("备选方案", "替代方案", "可替代方案", "下雨方案", "plan b"),
+}
+
+
+def _parse_freeform_itinerary_text(
+    text: str,
+    *,
+    session_state: dict[str, Any],
+) -> StructuredItinerary | None:
+    normalized_text = _normalize_freeform_text(text)
+    if not normalized_text:
+        return None
+
+    lines = [_sanitize_freeform_line(line) for line in normalized_text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return None
+
+    sections: dict[str, list[str]] = {key: [] for key in TEXT_SECTION_ALIASES}
+    day_buckets: list[dict[str, Any]] = []
+    current_section = "overview"
+    current_day: dict[str, Any] | None = None
+    current_time: str | None = None
+
+    def flush_day() -> None:
+        nonlocal current_day, current_time
+        if current_day is not None:
+            day_buckets.append(current_day)
+        current_day = None
+        current_time = None
+
+    for line in lines:
+        day_match = DAY_HEADING_RE.match(line)
+        if day_match:
+            flush_day()
+            day_number = _parse_day_number(day_match.group(1))
+            if day_number is None:
+                continue
+            current_day = {
+                "day": day_number,
+                "title": day_match.group(2).strip(),
+                "morning": [],
+                "afternoon": [],
+                "evening": [],
+                "notes": [],
+            }
+            current_section = "overview"
+            continue
+
+        section_match = _match_named_heading(line, TEXT_SECTION_ALIASES)
+        if section_match is not None:
+            flush_day()
+            current_section, remainder = section_match
+            if remainder:
+                sections[current_section].append(remainder)
+            continue
+
+        if current_day is None:
+            sections[current_section].append(line)
+            continue
+
+        time_match = _match_named_heading(line, TIME_HEADING_ALIASES)
+        if time_match is not None:
+            current_time, remainder = time_match
+            if remainder:
+                current_day[current_time].append(remainder)
+            continue
+
+        if current_time is None:
+            current_day["notes"].append(line)
+        else:
+            current_day[current_time].append(line)
+
+    flush_day()
+
+    daily_plans = [_build_day_plan(bucket) for bucket in day_buckets]
+    daily_plans = [plan for plan in daily_plans if plan is not None]
+    if not daily_plans:
+        single_day = _parse_single_day_blocks(lines, session_state=session_state)
+        if single_day is not None:
+            daily_plans = [single_day]
+
+    overview_lines = _clean_text_lines(sections["overview"])
+    weather_lines = _clean_text_lines(sections["weather_summary"])
+    hotel_lines = _clean_text_lines(sections["hotel"])
+    budget_lines = _clean_text_lines(sections["budget"])
+    alert_lines = _clean_text_lines(sections["alerts"])
+    alternative_lines = _clean_text_lines(sections["alternatives"])
+
+    has_meaningful_content = any(
+        (
+            overview_lines,
+            weather_lines,
+            hotel_lines,
+            budget_lines,
+            alert_lines,
+            alternative_lines,
+            daily_plans,
+        )
+    )
+    if not has_meaningful_content:
+        return None
+
+    return StructuredItinerary(
+        status="ready",
+        destination=str(session_state.get("city", "") or ""),
+        days=session_state.get("days"),
+        date=str(session_state.get("date", "") or ""),
+        companions=str(session_state.get("companions", "") or ""),
+        travel_style=str(session_state.get("pace", "") or ""),
+        budget=session_state.get("budget"),
+        overview=" ".join(overview_lines[:3]),
+        weather_summary=" ".join(weather_lines[:2]),
+        daily_plans=daily_plans,
+        hotel_suggestion=_build_hotel_suggestion(hotel_lines),
+        budget_advice=_build_budget_advice(budget_lines),
+        alerts=alert_lines,
+        alternatives=alternative_lines,
+        raw_text=text,
+    )
+
+
+def _normalize_freeform_text(text: str) -> str:
+    return (
+        text.replace("<br />", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br>", "\n")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+    )
+
+
+def _sanitize_freeform_line(line: str) -> str:
+    cleaned = line.strip()
+    if not cleaned:
+        return ""
+
+    previous = None
+    while cleaned and cleaned != previous:
+        previous = cleaned
+        cleaned = re.sub(r"^(?:#+|>+)\s*", "", cleaned)
+        cleaned = re.sub(r"^(?:[-*•]+)\s*", "", cleaned)
+        cleaned = re.sub(r"^\d+[.)、]\s*", "", cleaned)
+
+    cleaned = cleaned.replace("**", "").replace("__", "").replace("`", "").strip()
+    return cleaned
+
+
+def _match_named_heading(
+    line: str,
+    alias_map: dict[str, tuple[str, ...]],
+) -> tuple[str, str] | None:
+    for name, aliases in alias_map.items():
+        for alias in aliases:
+            pattern = rf"^{re.escape(alias)}(?:\s*[:：\-]\s*|\s+)?(.*)$"
+            match = re.match(pattern, line, flags=re.IGNORECASE)
+            if match:
+                return name, match.group(1).strip()
+    return None
+
+
+def _parse_day_number(value: str) -> int | None:
+    token = value.strip()
+    if not token:
+        return None
+    if token.isdigit():
+        return int(token)
+
+    digits = {
+        "零": 0,
+        "〇": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    total = 0
+    current = 0
+    for char in token:
+        if char in digits:
+            current = digits[char]
+            total += current
+            continue
+        if char == "十":
+            total = max(1, total) * 10
+            current = 0
+            continue
+        if char == "百":
+            total = max(1, total) * 100
+            current = 0
+            continue
+        return None
+    return total or current or None
+
+
+def _build_day_plan(bucket: dict[str, Any]) -> DayPlan | None:
+    notes = _clean_text_lines(bucket.get("notes", []))
+    morning_lines = _clean_text_lines(bucket.get("morning", []))
+    afternoon_lines = _clean_text_lines(bucket.get("afternoon", []))
+    evening_lines = _clean_text_lines(bucket.get("evening", []))
+
+    if not morning_lines and not afternoon_lines and not evening_lines and notes:
+        redistributed, remaining_notes = _redistribute_activity_notes(notes)
+        morning_lines = redistributed["morning"]
+        afternoon_lines = redistributed["afternoon"]
+        evening_lines = redistributed["evening"]
+        notes = remaining_notes
+
+    if not any((morning_lines, afternoon_lines, evening_lines, notes, bucket.get("title"))):
+        return None
+
+    return DayPlan(
+        day=bucket["day"],
+        title=str(bucket.get("title", "") or ""),
+        morning=_build_activity_list(morning_lines),
+        afternoon=_build_activity_list(afternoon_lines),
+        evening=_build_activity_list(evening_lines),
+        notes=notes,
+    )
+
+
+def _parse_single_day_blocks(
+    lines: list[str],
+    *,
+    session_state: dict[str, Any],
+) -> DayPlan | None:
+    if session_state.get("days") not in (None, 1):
+        return None
+
+    bucket = {
+        "day": 1,
+        "title": "",
+        "morning": [],
+        "afternoon": [],
+        "evening": [],
+        "notes": [],
+    }
+    current_time: str | None = None
+    has_time_block = False
+
+    for line in lines:
+        section_match = _match_named_heading(line, TEXT_SECTION_ALIASES)
+        if section_match is not None:
+            continue
+
+        time_match = _match_named_heading(line, TIME_HEADING_ALIASES)
+        if time_match is not None:
+            current_time, remainder = time_match
+            has_time_block = True
+            if remainder:
+                bucket[current_time].append(remainder)
+            continue
+
+        if current_time is None:
+            continue
+
+        bucket[current_time].append(line)
+
+    if not has_time_block:
+        return None
+    return _build_day_plan(bucket)
+
+
+def _clean_text_lines(lines: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for line in lines:
+        compact = re.sub(r"\s+", " ", line).strip(" -•")
+        if compact:
+            cleaned.append(compact)
+    return cleaned
+
+
+def _redistribute_activity_notes(notes: list[str]) -> tuple[dict[str, list[str]], list[str]]:
+    buckets = {"morning": [], "afternoon": [], "evening": []}
+    if not notes:
+        return buckets, []
+
+    slots = ("morning", "afternoon", "evening")
+    limit = min(len(notes), len(slots))
+    for index in range(limit):
+        buckets[slots[index]].append(notes[index])
+    return buckets, notes[limit:]
+
+
+def _build_activity_list(lines: list[str]) -> list[Activity]:
+    activities: list[Activity] = []
+    for line in lines:
+        for segment in _split_activity_segments(line):
+            title, reason = _split_activity_reason(segment)
+            if title:
+                activities.append(Activity(title=title, reason=reason))
+    return activities
+
+
+def _split_activity_segments(line: str) -> list[str]:
+    if "；" in line:
+        segments = [part.strip() for part in line.split("；")]
+        return [segment for segment in segments if segment]
+    return [line]
+
+
+def _split_activity_reason(segment: str) -> tuple[str, str]:
+    cleaned = segment.strip(" ，。；")
+    if not cleaned:
+        return "", ""
+
+    parenthetical = re.match(r"^(.*?)[（(]([^()（）]+)[）)]$", cleaned)
+    if parenthetical:
+        return parenthetical.group(1).strip(), parenthetical.group(2).strip()
+
+    for separator in ("：", ":"):
+        if separator in cleaned:
+            left, right = cleaned.split(separator, maxsplit=1)
+            if len(left.strip()) <= 18:
+                return left.strip(), right.strip()
+
+    dash_match = re.match(r"^(.*?)[-—](.+)$", cleaned)
+    if dash_match and len(dash_match.group(1).strip()) <= 18:
+        return dash_match.group(1).strip(), dash_match.group(2).strip()
+
+    return cleaned, ""
+
+
+def _build_hotel_suggestion(lines: list[str]) -> HotelSuggestion:
+    if not lines:
+        return HotelSuggestion()
+
+    area = lines[0]
+    reason = " ".join(lines[1:3]) if len(lines) > 1 else ""
+    candidates: list[str] = []
+    for line in lines[1:]:
+        if any(keyword in line for keyword in ("酒店", "民宿", "客栈", "公寓")):
+            candidates.append(line)
+
+    return HotelSuggestion(area=area, reason=reason, candidates=candidates[:5])
+
+
+def _build_budget_advice(lines: list[str]) -> BudgetAdvice:
+    if not lines:
+        return BudgetAdvice()
+
+    summary = " ".join(lines[:3])
+    level = ""
+    if any(keyword in summary for keyword in ("紧张", "偏紧", "压缩")):
+        level = "偏紧"
+    elif any(keyword in summary for keyword in ("充足", "宽松", "舒服")):
+        level = "宽松"
+
+    return BudgetAdvice(level=level, summary=summary)
 
 
 def _build_missing_info_questions(session_state: dict[str, Any]) -> list[str]:
