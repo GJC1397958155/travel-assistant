@@ -19,6 +19,8 @@ Travel Assistant 是一个面向旅游规划场景的大模型 Agent 系统。
 - 🧠 长短期记忆管理
 - 📚 RAG知识增强
 - ⚡ SSE流式输出
+  
+<img width="1920" height="1080" alt="旅游2" src="https://github.com/user-attachments/assets/4cd63048-b8c8-47e7-b3b1-40f2b2b12f9f" />
 
 
 ## ✨ 核心功能
@@ -249,18 +251,46 @@ LLM Generation
 ```bash
 travel-assistant/
 │
-├── backend/           # FastAPI后端
-├── frontend/          # 前端页面
-├── agents/            # Agent定义
-├── workflows/         # LangGraph工作流
-├── rag/               # RAG模块
-├── memory/            # 长短期记忆
-├── tools/             # MCP工具
-├── prompts/           # Prompt模板
-├── database/          # SQLite数据库
-├── tests/             # 测试集
+├── Travel Planning Assistant/      # 前端项目（React + Vite）
+│
+├── rag/                            # RAG检索模块
+│   ├── embedding.py
+│   ├── retrieval.py
+│   ├── hybrid_search.py
+│   └── ...
+│
+├── tools/                          # MCP工具封装
+│   ├── weather_tool.py
+│   ├── map_tool.py
+│   ├── place_search.py
+│   └── ...
+│
+├── china_34_travel_rag_kb/         # 旅游知识库数据
+│   ├── attractions/
+│   ├── hotels/
+│   ├── transportation/
+│   └── ...
+│
+├── .travel-memory/                 # 用户长期记忆存储
+│
+├── evals/                          # RAG评测数据与实验结果
+│
+├── app.py                          # FastAPI应用入口
+├── config.py                       # 项目配置管理
+├── state.py                        # LangGraph共享状态定义
+├── prompts.py                      # Prompt模板管理
+├── itinerary.py                    # 行程规划核心逻辑
+├── mcp_server.py                   # MCP服务端实现
+│
+├── requirements.txt                # Python依赖
+├── start-dev.ps1                   # Windows启动脚本
+├── start-dev.cmd
+│
+├── .env                            # 环境变量配置
+├── .gitignore
 └── README.md
 ```
+
 
 
 ## 🚀 快速启动
