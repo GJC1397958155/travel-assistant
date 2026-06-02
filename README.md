@@ -19,8 +19,10 @@ Travel Assistant 是一个面向旅游规划场景的大模型 Agent 系统。
 - 🧠 长短期记忆管理
 - 📚 RAG知识增强
 - ⚡ SSE流式输出
-  
+
+<img width="1920" height="1080" alt="旅游运行界面" src="https://github.com/user-attachments/assets/218a9222-6816-4089-9ac7-0e1ef4435491" />
 <img width="1920" height="1080" alt="旅游2" src="https://github.com/user-attachments/assets/4cd63048-b8c8-47e7-b3b1-40f2b2b12f9f" />
+<img width="1920" height="1080" alt="旅游地图放大版" src="https://github.com/user-attachments/assets/da6790ec-14d3-4fd2-9512-6d3738a4e75d" />
 
 
 ## ✨ 核心功能
